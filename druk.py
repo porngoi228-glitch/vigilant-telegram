@@ -64,6 +64,8 @@ class GameStates(StatesGroup):
     knt_wait = State()
     knt_two_wait = State()
     hangman = State()
+    wordle = State()
+    wordle_two = State()
 
 
 SHAPES = {"камень", "ножницы", "бумага"}
@@ -105,6 +107,12 @@ GAME_STARTERS = {
     "виселица",
     "угадай слово",
     "отгадай слово",
+    "wordle",
+    "вордл",
+    "вордли",
+    "wordle на двоих",
+    "wordle2",
+    "вордл на двоих",
 }
 CANCEL_WORDS = {"стоп", "стоп игра", "выход", "отмена", "хватит"}
 
@@ -118,6 +126,7 @@ GAME_LIST = (
     "• <b>шашки на двоих</b> — вдвоём на одной доске, даже с разных устройств в одной группе\n"
     "• <b>кнт</b> — крестики-нолики против бота; на двоих: «кнт на двоих»\n"
     "• <b>виселица</b> — угадай слово по буквам\n"
+    "• <b>wordle</b> — угадай пятибуквенное слово за 6 попыток; на двоих: «wordle на двоих»\n"
     "Всё играется кнопками. Напиши название игры, чтобы начать. Выйти — «стоп»."
 )
 
@@ -295,6 +304,47 @@ HANGMAN_WORDS = [
     "облако", "пицца", "планета", "ракета", "собака", "солнце",
     "стол", "телефон", "трава", "утро", "чашка", "школа",
 ]
+
+WORDLE_WORDS = [
+    "абзац", "акула", "афиша", "багаж", "банан", "батон", "берег", "билет",
+    "бочка", "брюки", "булка", "буква", "вагон", "вафля", "весло", "ветка",
+    "вечер", "вилка", "вишня", "ворот", "вьюга", "гараж", "дверь", "дефис",
+    "дождь", "дрова", "забор", "закат", "канал", "капля", "кобра", "ковер",
+    "кокос", "комар", "короб", "котел", "крыша", "кулак", "лавка", "ладон",
+    "лампа", "лента", "лимон", "ложка", "майка", "маска", "метла", "мешок",
+    "молот", "мороз", "музей", "насос", "невод", "носки", "обман", "обувь",
+    "овраг", "окунь", "орден", "осень", "палец", "парта", "пирог", "пламя",
+    "порог", "поход", "поэма", "радио", "ранец", "рынок", "салат", "салют",
+    "сахар", "север", "сироп", "скала", "сосна", "спорт", "судно", "табло",
+    "тапки", "тачка", "театр", "тепло", "тесто", "топор", "трава", "труба",
+    "туман", "тумба", "удача", "уксус", "улица", "фильм", "фокус", "фраза",
+    "хвост", "химия", "холст", "чашка", "чугун", "шапка", "шахта", "шляпа",
+    "штора", "щепка",
+]
+
+
+def wordle_feedback(guess, word):
+    res = ["⬛"] * len(guess)
+    counts = {}
+    for ch in word:
+        counts[ch] = counts.get(ch, 0) + 1
+    for i, (g, s) in enumerate(zip(guess, word)):
+        if g == s:
+            res[i] = "🟩"
+            counts[g] -= 1
+    for i, (g, s) in enumerate(zip(guess, word)):
+        if g != s and counts.get(g, 0) > 0:
+            res[i] = "🟨"
+            counts[g] -= 1
+    return "".join(res)
+
+
+def wordle_view(guesses, word):
+    return "\n".join(f"{i}. {html.escape(g)} {wordle_feedback(g, word)}" for i, g in enumerate(guesses, 1))
+
+
+def is_word5(t):
+    return len(t) == 5 and all(ch in LETTERS for ch in t)
 
 
 def mask_word(word, found):
@@ -753,6 +803,100 @@ async def hangman_guess(message: Message, state: FSMContext):
     await say(message, hangman_text(word, found, wrong, left) + "\n\nНе то слово, друк. Ещё вариант?", markup=hang_board(set(wrong)))
 
 
+def stop_kb() -> InlineKeyboardMarkup:
+    return kb([[btn("Сдаться", "stop_game")]])
+
+
+@dp.message(F.text)
+async def start_wordle(message: Message, state: FSMContext):
+    if norm(message.text).lower() not in {"wordle", "вордл", "вордли"}:
+        raise SkipHandler
+    word = random.choice(WORDLE_WORDS)
+    await state.clear()
+    await state.set_state(GameStates.wordle)
+    await state.update_data(word=word, guesses=[], attempts=0)
+    await say(
+        message,
+        f"Загадал слово из 5 букв, друк. У тебя 6 попыток. Пиши вариант!\n🟩 верная буква, 🟨 есть в слове, ⬛ нет.",
+        markup=stop_kb(),
+    )
+
+
+@dp.message(F.text)
+async def wordle_move(message: Message, state: FSMContext):
+    if await state.get_state() != GameStates.wordle:
+        raise SkipHandler
+    t = norm(message.text).lower()
+    if not is_word5(t):
+        await say(message, "Пиши слово ровно из 5 букв, друк.", markup=stop_kb())
+        return
+    data = await state.get_data()
+    word = data["word"]
+    guesses = data["guesses"]
+    attempts = data["attempts"] + 1
+    guesses.append(t)
+    if t == word:
+        await state.clear()
+        await say(message, wordle_view(guesses, word) + "\n\nВ яблочко, друк! Ты отгадал!", markup=replay_board("word_again"))
+        return
+    if attempts >= 6:
+        await state.clear()
+        await say(message, wordle_view(guesses, word) + f"\n\nПопытки кончились, друк. Слово было: {html.escape(word)}.", markup=replay_board("word_again"))
+        return
+    await state.update_data(guesses=guesses, attempts=attempts)
+    await say(
+        message,
+        wordle_view(guesses, word) + f"\n\nОсталось попыток: {6 - attempts}.",
+        markup=stop_kb(),
+    )
+
+
+@dp.message(F.text)
+async def start_wordle_two(message: Message, state: FSMContext):
+    if norm(message.text).lower() not in {"wordle на двоих", "wordle2", "вордл на двоих"}:
+        raise SkipHandler
+    await state.clear()
+    await state.set_state(GameStates.wordle_two)
+    await state.update_data(word=None, guesses=[], attempts=0, setter=None)
+    await say(message, "Играем вдвоём! Загадывающий — напиши тайное слово из 5 букв (оно покажу скрыто). Угадывающий будет писать варианты.", markup=stop_kb())
+
+
+@dp.message(F.text)
+async def wordle_two_move(message: Message, state: FSMContext):
+    if await state.get_state() != GameStates.wordle_two:
+        raise SkipHandler
+    data = await state.get_data()
+    t = norm(message.text).lower()
+    if data["word"] is None:
+        if not is_word5(t):
+            await say(message, "Загадывающий, нужное слово из 5 букв, друк.", markup=stop_kb())
+            return
+        await state.update_data(word=t, setter=player_name(message))
+        await say(
+            message,
+            f"Слово записано (скрыто, не открывай!): <tg-spoiler>{html.escape(t)}</tg-spoiler>\nУгадывающий, пиши варианты!",
+            markup=stop_kb(),
+        )
+        return
+    if not is_word5(t):
+        await say(message, "Пиши слово ровно из 5 букв, друк.", markup=stop_kb())
+        return
+    word = data["word"]
+    guesses = data["guesses"]
+    attempts = data["attempts"] + 1
+    guesses.append(t)
+    if t == word:
+        await state.clear()
+        await say(message, wordle_view(guesses, word) + f"\n\nУгадал(а) {player_name(message)}, друк! Загадывал(а): {data['setter']}.", markup=replay_board("word2_again"))
+        return
+    if attempts >= 6:
+        await state.clear()
+        await say(message, wordle_view(guesses, word) + f"\n\nПопытки кончились, друк. Слово было: {html.escape(word)}. Загадывал(а): {data['setter']}.", markup=replay_board("word2_again"))
+        return
+    await state.update_data(guesses=guesses, attempts=attempts)
+    await say(message, wordle_view(guesses, word) + f"\n\nОсталось попыток: {6 - attempts}.", markup=stop_kb())
+
+
 @dp.callback_query(F.data)
 async def on_game_callback(query: CallbackQuery, state: FSMContext):
     data = query.data
@@ -1112,6 +1256,25 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         await query.message.edit_text(
             render(board) + "\n\nНовая партия! Белые (⛀) ходят первыми.",
             reply_markup=chk_board(board, prefix="chk2"),
+        )
+        return
+
+    if data == "word_again":
+        word = random.choice(WORDLE_WORDS)
+        await state.set_state(GameStates.wordle)
+        await state.update_data(word=word, guesses=[], attempts=0)
+        await query.message.edit_text(
+            "Новый Wordle! Загадал слово из 5 букв. У тебя 6 попыток. Пиши вариант!",
+            reply_markup=stop_kb(),
+        )
+        return
+
+    if data == "word2_again":
+        await state.set_state(GameStates.wordle_two)
+        await state.update_data(word=None, guesses=[], attempts=0, setter=None)
+        await query.message.edit_text(
+            "Новый раунд! Загадывающий — напиши тайное слово из 5 букв.",
+            reply_markup=stop_kb(),
         )
         return
 
