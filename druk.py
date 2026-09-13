@@ -4,6 +4,7 @@ import html
 import logging
 import os
 import random
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -127,7 +128,7 @@ GAME_LIST = (
     "• <b>шашки на двоих</b> — вдвоём на одной доске, даже с разных устройств в одной группе\n"
     "• <b>кнт</b> — крестики-нолики против бота; на двоих: «кнт на двоих»\n"
     "• <b>виселица</b> — угадай слово по буквам\n"
-    "• <b>wordle</b> — угадай пятибуквенное слово за 6 попыток; на двоих: «wordle на двоих»\n"
+    "• <b>wordle</b> — угадай слово от 4 до 13 букв (длину выбираешь кнопками, за 6 попыток); на двоих: «wordle на двоих»\n"
     "Всё играется кнопками. Напиши название игры, чтобы начать. Выйти — «стоп»."
 )
 
@@ -142,10 +143,26 @@ def pick_response(response):
     return response
 
 
+def tokenize(text: str):
+    return re.findall(r"[а-яёa-z0-9]+", text.lower())
+
+
+def text_has_phrase(tokens, phrase):
+    phrase = [p for p in phrase if p]
+    if not phrase:
+        return False
+    if len(phrase) == 1:
+        return phrase[0] in tokens
+    for i in range(len(tokens) - len(phrase) + 1):
+        if tokens[i : i + len(phrase)] == phrase:
+            return True
+    return False
+
+
 def find_response(text: str):
-    text_lower = text.lower()
+    tokens = tokenize(text)
     for trigger, response in TRIGGERS.items():
-        if trigger.lower() in text_lower:
+        if text_has_phrase(tokens, tokenize(trigger)):
             return pick_response(response)
     return None
 
@@ -160,6 +177,11 @@ async def say(message: Message, text: str, markup=None):
         reply_parameters=ReplyParameters(message_id=message.message_id),
         reply_markup=markup,
     )
+    if ACTIVE_CHATS and random.random() < 0.05:
+        try:
+            await send_media_to_chat(message.chat.id)
+        except Exception:
+            logging.exception("Не смог отправить кота вместе с ответом")
 
 
 async def bind_player(state, uid, max_players=1):
@@ -328,22 +350,113 @@ HANGMAN_WORDS = [
     "стол", "телефон", "трава", "утро", "чашка", "школа",
 ]
 
-WORDLE_WORDS = [
-    "абзац", "акула", "афиша", "багаж", "банан", "батон", "берег", "билет",
-    "бочка", "брюки", "булка", "буква", "вагон", "вафля", "весло", "ветка",
-    "вечер", "вилка", "вишня", "ворот", "вьюга", "гараж", "дверь", "дефис",
-    "дождь", "дрова", "забор", "закат", "канал", "капля", "кобра", "ковер",
-    "кокос", "комар", "короб", "котел", "крыша", "кулак", "лавка", "ладон",
-    "лампа", "лента", "лимон", "ложка", "майка", "маска", "метла", "мешок",
-    "молот", "мороз", "музей", "насос", "невод", "носки", "обман", "обувь",
-    "овраг", "окунь", "орден", "осень", "палец", "парта", "пирог", "пламя",
-    "порог", "поход", "поэма", "радио", "ранец", "рынок", "салат", "салют",
-    "сахар", "север", "сироп", "скала", "сосна", "спорт", "судно", "табло",
-    "тапки", "тачка", "театр", "тепло", "тесто", "топор", "трава", "труба",
-    "туман", "тумба", "удача", "уксус", "улица", "фильм", "фокус", "фраза",
-    "хвост", "химия", "холст", "чашка", "чугун", "шапка", "шахта", "шляпа",
-    "штора", "щепка",
-]
+WORDLE_WORDS_BY_LEN = {
+    4: [
+        "атом", "беда", "вера", "вино", "волк", "враг", "жара", "зима",
+        "каша", "ключ", "конь", "лиса", "луна", "мыло", "морс", "мост",
+        "мука", "небо", "ночь", "окно", "осел", "пена", "пень", "пиво",
+        "пила", "поле", "пора", "путь", "река", "роса", "рука", "сало",
+        "сено", "сила", "соль", "соус", "стул", "тень", "тигр", "торт",
+        "туча", "утро", "флаг", "хвоя", "цвет", "шуба", "юмор", "язык",
+    ],
+    5: [
+        "абзац", "акула", "афиша", "багаж", "банан", "батон", "берег", "билет",
+        "бочка", "брюки", "булка", "буква", "вагон", "вафля", "весло", "ветка",
+        "вечер", "вилка", "вишня", "ворот", "вьюга", "гараж", "дверь", "дефис",
+        "дождь", "дрова", "забор", "закат", "канал", "капля", "кобра", "ковер",
+        "кокос", "комар", "короб", "котел", "крыша", "кулак", "лавка", "ладон",
+        "лампа", "лента", "лимон", "ложка", "майка", "маска", "метла", "мешок",
+        "молот", "мороз", "музей", "насос", "невод", "носки", "обман", "обувь",
+        "овраг", "окунь", "орден", "осень", "палец", "парта", "пирог", "пламя",
+        "порог", "поход", "поэма", "радио", "ранец", "рынок", "салат", "салют",
+        "сахар", "север", "сироп", "скала", "сосна", "спорт", "судно", "табло",
+        "тапки", "тачка", "театр", "тепло", "тесто", "топор", "трава", "труба",
+        "туман", "тумба", "удача", "уксус", "улица", "фильм", "фокус", "фраза",
+        "хвост", "химия", "холст", "чашка", "чугун", "шапка", "шахта", "шляпа",
+        "штора", "щепка",
+    ],
+    6: [
+        "абажур", "аврора", "акация", "амфора", "анкета", "аптека", "баллон",
+        "береза", "бирюза", "воздух", "вокзал", "восход", "газета", "горсть",
+        "глобус", "гнездо", "гранит", "дракон", "дюжина", "железо", "жемчуг",
+        "журнал",
+        "звезда", "зигзаг", "кабина", "камера", "карман", "качели", "клетка",
+        "климат", "клумба", "кнопка", "коврик", "колдун", "компас", "корона",
+        "корыто", "костюм", "краска", "кувшин", "куртка", "лавина", "лагуна",
+        "лебедь", "лопата", "лошадь", "люстра", "малина", "медаль", "минута",
+        "молоко", "монета", "низина", "номера", "облако", "одеяло", "оливка",
+        "осадки", "павлин", "пальма", "панама", "парник", "пастух", "патрон",
+        "пенсия", "перрон", "планка", "погода", "посуда", "правда", "призма",
+        "ракета", "рельсы", "свитер", "сердце", "синяки", "скамья", "соболь",
+        "стакан", "статуя", "стекло", "супруг", "тишина", "тормоз", "турнир",
+        "уборка", "указка", "фасоль", "фаэтон", "фигура", "фонарь", "фонтан",
+        "цветок", "чайник", "шедевр", "щетина", "ястреб",
+    ],
+    7: [
+        "автомат", "баранка", "бассейн", "бегемот", "бильярд", "бинокль",
+        "варежка", "ветчина", "водопой", "воронка", "воробей",
+        "журавль", "загадка", "занавес", "записка", "звонарь", "зоопарк",
+        "игрушка", "иллюзия", "калитка", "капуста", "карьера", "кипяток",
+        "клавиша", "комната", "конверт", "копейка", "коробка", "котлета",
+        "крапива", "кровать", "крыльцо", "лукошко", "лунатик", "любимый",
+        "медовик", "молоток", "мышонок", "награда", "надписи", "накидка",
+        "невеста", "новость", "облачко", "обложка", "оборона", "окрошка",
+        "орленок", "палатка", "палитра", "пантера", "парашют", "плинтус",
+        "подкова", "подушка", "подъезд", "помидор", "посылка", "правила",
+        "провода", "пылесос", "разлука", "рассвет", "ребенок", "редиска",
+        "ресницы", "рисунок", "ромашка", "рубашка", "сарафан", "свисток",
+        "секунда", "семинар", "сержант", "скворец", "складка", "скрипка",
+        "славный", "сметана", "снегирь", "спальня", "стадион", "студень",
+        "сувенир", "сюрприз", "телефон", "темнота", "терапия", "тетрадь",
+        "торнадо", "трактор", "трибуна", "упряжка", "хвостик", "чемпион",
+        "черника", "шоколад", "ящерица",
+    ],
+    8: [
+        "антилопа", "апельсин", "баклажан", "виноград", "грибочек", "грузовик",
+        "дикобраз", "дождевик", "закладка", "картошка", "карусель", "кастрюля",
+        "километр", "клубника", "королева", "крокодил", "крышечка", "кузнечик",
+        "модистка", "морковка", "обезьяна", "осьминог", "пирамида", "пирожное",
+        "пистолет", "поплавок", "портфель", "праздник", "пригород", "проблема",
+        "пуговица", "разговор", "ресторан", "скорпион", "снеговик", "спальник",
+        "спортзал", "страница", "стрекоза", "торговля", "трамплин", "трапеция",
+        "туфелька", "футболка", "хлопушка", "хоккеист", "хрусталь", "цветочек",
+        "чаепитие", "школьник",
+    ],
+    9: [
+        "аккуратно", "баскетбол", "бутерброд", "велосипед",
+        "волшебник", "замечание", "звездочка", "земляника", "календарь",
+        "канарейка", "компьютер", "малиновка", "маленький", "маршрутка",
+        "небоскреб", "олимпиада", "пантомима", "пластилин", "принцесса",
+        "репетиция", "рисование", "рукавичка", "самолетик", "сантиметр",
+        "светлячок", "смородина", "сокровище", "солнечный", "стремянка",
+        "табуретка", "телевизор", "термометр", "транспорт", "тяжеловес",
+        "чебурашка", "шоколадка", "эскалатор",
+    ],
+    10: [
+        "автомобиль", "воспитание", "наводнение", "облачность", "парикмахер",
+        "подорожник", "противогаз", "разделение", "расписание", "скороварка",
+        "сладкоежка", "соединение", "сокращение", "экскаватор",
+    ],
+    11: [
+        "вдохновение", "впечатление", "изобретение", "конструктор",
+        "понедельник", "приветствие", "приключение", "путешествие",
+        "температура", "университет", "уничтожение", "холодильник",
+        "цивилизация",
+    ],
+    12: [
+        "библиотекарь", "велосипедист", "оборудование", "пододеяльник",
+        "поздравление",
+    ],
+    13: [
+        "благодарность", "микроволновка", "представление", "расследование",
+        "свидетельство", "строительство", "электричество",
+    ],
+}
+
+
+def word_of_len(n):
+    words = WORDLE_WORDS_BY_LEN.get(n) or []
+    return random.choice(words) if words else None
 
 
 def wordle_feedback(guess, word):
@@ -366,8 +479,8 @@ def wordle_view(guesses, word):
     return "\n".join(f"{i}. {html.escape(g)} {wordle_feedback(g, word)}" for i, g in enumerate(guesses, 1))
 
 
-def is_word5(t):
-    return len(t) == 5 and all(ch in LETTERS for ch in t)
+def is_word_n(t, n):
+    return len(t) == n and all(ch in LETTERS for ch in t)
 
 
 def mask_word(word, found):
@@ -383,6 +496,7 @@ def hangman_text(word, found, wrong, left):
 
 
 ACTIVE_CHATS: set = set()
+LOBBIES: dict = {}
 
 MEDIA_DIR = "media"
 MEDIA_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4")
@@ -407,19 +521,23 @@ def random_media():
     return random.choice(paths) if paths else None
 
 
-async def send_random_media():
-    if not ACTIVE_CHATS:
-        return
+async def send_media_to_chat(chat_id):
     media = random_media()
     if media is None:
         logging.info("Нет медиа в папке %s — пропускаю рассылку.", MEDIA_DIR)
         return
-    chat_id = random.choice(list(ACTIVE_CHATS))
     if media.lower().endswith((".gif", ".mp4")):
         await bot.send_animation(chat_id, FSInputFile(media))
     else:
         await bot.send_photo(chat_id, FSInputFile(media))
     logging.info("Отправил медиа %s в чат %s", media, chat_id)
+
+
+async def send_random_media():
+    if not ACTIVE_CHATS:
+        return
+    chat_id = random.choice(list(ACTIVE_CHATS))
+    await send_media_to_chat(chat_id)
 
 
 async def media_loop():
@@ -439,10 +557,31 @@ async def media_loop():
 
 MEDIA_STOP_WORDS = {"скинь фото", "фото", "фотку", "гиф", "гифку", "картинку", "пришли фото"}
 
+MAT_WORDS = {
+    "бля", "блядь", "бляди", "блядский",
+    "хуй", "хуя", "хуи", "нахуй", "нахуя", "похуй", "хуевый",
+    "пизда", "пиздец", "пизды",
+    "ебать", "ебало", "ебло", "еблан", "ебаный", "уебан", "уебать", "уебок", "заебал", "заебало", "заебись",
+    "пидор", "пидр", "пидорас", "пидарас",
+    "мудак", "мудаки", "мудило", "мудила",
+    "залупа", "гандон", "гондон", "мразь", "ублюдок", "шлюха",
+    "дебил", "дебилы", "даун", "дауны", "кретин", "конченый", "дерьмо",
+}
+
 
 @dp.message(Command("start", "help"))
 async def cmd_start(message: Message):
-    await say(message, "Привет, друк! Я Друк-бот v1.2." + GAME_LIST)
+    await say(message, "Привет, друк! Я Друк-бот v1.3." + GAME_LIST)
+
+
+@dp.message(F.text)
+async def mat_block(message: Message, state: FSMContext):
+    if await state.get_state() is not None:
+        raise SkipHandler
+    words = {w.replace("ё", "е") for w in tokenize(message.text)}
+    if not (words & MAT_WORDS):
+        raise SkipHandler
+    await say(message, "Эй, друк, не пиши такое при мне 🙂")
 
 
 @dp.message(F.text)
@@ -508,7 +647,9 @@ async def knb_move(message: Message, state: FSMContext):
 async def start_knb_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"кнб на двоих", "кнб вдвоём", "кнб2"}:
         raise SkipHandler
-    await say(message, "🎮 КНБ вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("knb2"))
+    await state.clear()
+    LOBBIES[message.chat.id] = {"host": msg_uid(message), "kind": "knb2"}
+    await say(message, "🎮 КНБ вдвоём!\nЖдём второго игрока, друк. Второй жми «Вступить».", markup=lobby_kb("knb2"))
 
 
 @dp.message(F.text)
@@ -619,7 +760,9 @@ async def start_checkers(message: Message, state: FSMContext):
 async def start_checkers_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"шашки на двоих", "шашки вдвоём", "шашки с братаном", "шашки2"}:
         raise SkipHandler
-    await say(message, "🎮 Шашки вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("chk2"))
+    await state.clear()
+    LOBBIES[message.chat.id] = {"host": msg_uid(message), "kind": "chk2"}
+    await say(message, "🎮 Шашки вдвоём!\nЖдём второго игрока, друк. Второй жми «Вступить».", markup=lobby_kb("chk2"))
 
 
 @dp.message(F.text)
@@ -723,7 +866,9 @@ async def knt_move(message: Message, state: FSMContext):
 async def start_knt_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"крестики-нолики на двоих", "кнт на двоих", "кнт вдвоём", "кнт2"}:
         raise SkipHandler
-    await say(message, "🎮 КНТ вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("knt2"))
+    await state.clear()
+    LOBBIES[message.chat.id] = {"host": msg_uid(message), "kind": "knt2"}
+    await say(message, "🎮 КНТ вдвоём!\nЖдём второго игрока, друк. Второй жми «Вступить».", markup=lobby_kb("knt2"))
 
 
 @dp.message(F.text)
@@ -832,7 +977,24 @@ def stop_kb() -> InlineKeyboardMarkup:
 
 
 def lobby_kb(kind: str) -> InlineKeyboardMarkup:
-    return kb([[btn("Сыграть", f"lobby:{kind}")], [btn("Отмена", "stop_game")]])
+    return kb([[btn("Вступить", f"lobby:{kind}")], [btn("Отмена", "stop_game")]])
+
+
+def length_kb() -> InlineKeyboardMarkup:
+    rows = [[btn(str(n), f"wlen:{n}") for n in range(4, 10)]]
+    rows.append([btn(str(n), f"wlen:{n}") for n in range(10, 14)])
+    rows.append([btn("Отмена", "stop_game")])
+    return kb(rows)
+
+
+def word_build_kb(n, draft) -> InlineKeyboardMarkup:
+    rows = []
+    cols = 7
+    for i in range(0, len(LETTERS), cols):
+        rows.append([btn(ch, f"wl2:{ch}") for ch in LETTERS[i : i + cols]])
+    rows.append([btn("Готово", "wl2:ok"), btn("Сбросить", "wl2:clr")])
+    rows.append([btn("Отмена", "stop_game")])
+    return kb(rows)
 
 
 TWO_PLAYER_STATES = {
@@ -858,25 +1020,21 @@ def lobby_payload(kind: str):
         )
     if kind == "wordle2":
         return (
-            "Играем вдвоём! Загадывающий — напиши тайное слово из 5 букв (покажу скрыто). Угадывающий будет писать варианты.",
-            stop_kb(),
+            "Играем вдвоём! Загадывающий жмёт кнопку с длиной слова, потом собирает его буквами — "
+            "покажу скрыто, чтобы не подсматривали. Угадывающий будет писать варианты.",
+            length_kb(),
         )
     return None, None
 
 
 @dp.message(F.text)
 async def start_wordle(message: Message, state: FSMContext):
-    if norm(message.text).lower() not in {"wordle", "вордл", "вордли"}:
+    if norm(message.text).lower() not in {"wordle", "вордл", "вордли", "вордле"}:
         raise SkipHandler
-    word = random.choice(WORDLE_WORDS)
     await state.clear()
     await state.set_state(GameStates.wordle)
-    await state.update_data(word=word, guesses=[], attempts=0, players=[msg_uid(message)])
-    await say(
-        message,
-        f"Загадал слово из 5 букв, друк. У тебя 6 попыток. Пиши вариант!\n🟩 верная буква, 🟨 есть в слове, ⬛ нет.",
-        markup=stop_kb(),
-    )
+    await state.update_data(word=None, length=None, guesses=[], attempts=0, players=[msg_uid(message)])
+    await say(message, "Wordle, друк! Сколько букв загадываю? Жми кнопку.", markup=length_kb())
 
 
 @dp.message(F.text)
@@ -885,12 +1043,15 @@ async def wordle_move(message: Message, state: FSMContext):
         raise SkipHandler
     if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
-    t = norm(message.text).lower()
-    if not is_word5(t):
-        await say(message, "Пиши слово ровно из 5 букв, друк.", markup=stop_kb())
-        return
     data = await state.get_data()
-    word = data["word"]
+    word = data.get("word")
+    if word is None:
+        await say(message, "Выбери длину слова кнопками, друк.", markup=length_kb())
+        return
+    t = norm(message.text).lower()
+    if not is_word_n(t, len(word)):
+        await say(message, f"Пиши слово ровно из {len(word)} букв, друк.", markup=stop_kb())
+        return
     guesses = data["guesses"]
     attempts = data["attempts"] + 1
     guesses.append(t)
@@ -912,9 +1073,11 @@ async def wordle_move(message: Message, state: FSMContext):
 
 @dp.message(F.text)
 async def start_wordle_two(message: Message, state: FSMContext):
-    if norm(message.text).lower() not in {"wordle на двоих", "wordle2", "вордл на двоих"}:
+    if norm(message.text).lower() not in {"wordle на двоих", "wordle2", "вордл на двоих", "вордле на двоих"}:
         raise SkipHandler
-    await say(message, "🎮 Wordle вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("wordle2"))
+    await state.clear()
+    LOBBIES[message.chat.id] = {"host": msg_uid(message), "kind": "wordle2"}
+    await say(message, "🎮 Wordle вдвоём!\nЖдём второго игрока, друк. Второй жми «Вступить».", markup=lobby_kb("wordle2"))
 
 
 @dp.message(F.text)
@@ -923,22 +1086,17 @@ async def wordle_two_move(message: Message, state: FSMContext):
         raise SkipHandler
     await ensure_players(state, msg_uid(message))
     data = await state.get_data()
+    if data.get("building"):
+        await say(message, "Слово сейчас собирается кнопками, друк. Подожди.")
+        return
+    word = data.get("word")
+    if word is None:
+        await say(message, "Загадывающий ещё не собрал слово, друк. Ждём кнопки.")
+        return
     t = norm(message.text).lower()
-    if data["word"] is None:
-        if not is_word5(t):
-            await say(message, "Загадывающий, нужное слово из 5 букв, друк.", markup=stop_kb())
-            return
-        await state.update_data(word=t, setter=player_name(message))
-        await say(
-            message,
-            f"Слово записано (скрыто, не открывай!): <tg-spoiler>{html.escape(t)}</tg-spoiler>\nУгадывающий, пиши варианты!",
-            markup=stop_kb(),
-        )
+    if not is_word_n(t, len(word)):
+        await say(message, f"Пиши слово ровно из {len(word)} букв, друк.", markup=stop_kb())
         return
-    if not is_word5(t):
-        await say(message, "Пиши слово ровно из 5 букв, друк.", markup=stop_kb())
-        return
-    word = data["word"]
     guesses = data["guesses"]
     attempts = data["attempts"] + 1
     guesses.append(t)
@@ -981,8 +1139,87 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
                 return
 
     if data == "stop_game":
+        chat_id = getattr(getattr(query.message, "chat", None), "id", None)
+        LOBBIES.pop(chat_id, None)
         await state.clear()
         await query.message.edit_text("Игра отменена, друк.")
+        return
+
+    if data.startswith("wlen:"):
+        try:
+            n = int(data.split(":", 1)[1])
+        except ValueError:
+            return
+        if n not in range(4, 14):
+            return
+        if cur == GameStates.wordle.state:
+            word = word_of_len(n)
+            if word is None:
+                await query.message.edit_text("Для такой длины слов пока нет, друк. Выбери другую:", reply_markup=length_kb())
+                return
+            await state.update_data(word=word, length=n, guesses=[], attempts=0)
+            await query.message.edit_text(
+                f"Загадал слово из {n} букв, друк. У тебя 6 попыток. Пиши вариант!\n🟩 верная буква, 🟨 есть в слове, ⬛ нет.",
+                reply_markup=stop_kb(),
+            )
+            return
+        if cur == GameStates.wordle_two.state:
+            st = await state.get_data()
+            if st.get("building"):
+                await query.answer()
+                return
+            await state.update_data(length=n, building=True, draft=[], setter=uid)
+            await query.message.edit_text(
+                f"Загадывающий, собирай слово из {n} букв кнопками. Я показываю его скрыто — остальным не видно.",
+                reply_markup=word_build_kb(n, []),
+            )
+            return
+        await query.message.edit_text("Игра уже закончилась, друк.")
+        return
+
+    if data.startswith("wl2:"):
+        if cur != GameStates.wordle_two.state:
+            await query.message.edit_text("Игра уже закончилась, друк.")
+            return
+        st = await state.get_data()
+        if not st.get("building"):
+            await query.answer()
+            return
+        if uid != st.get("setter"):
+            await query.answer()
+            return
+        arg = data.split(":", 1)[1]
+        draft = st.get("draft") or []
+        n = st.get("length") or 5
+        if arg == "ok":
+            if len(draft) != n:
+                await query.message.edit_text(f"В слове {n} букв, сейчас {len(draft)}. Добавь или сбрось:", reply_markup=word_build_kb(n, draft))
+                return
+            word = "".join(draft)
+            await state.update_data(building=False, word=word)
+            await query.message.edit_text(
+                f"Слово записано (скрыто, не открывай!): <tg-spoiler>{html.escape(word)}</tg-spoiler>\nУгадывающий, пиши слово из {n} букв!",
+                reply_markup=stop_kb(),
+            )
+            return
+        if arg == "clr":
+            await state.update_data(draft=[])
+            await query.message.edit_text(f"Загадывающий, слово из {n} букв. Жми буквы:", reply_markup=word_build_kb(n, []))
+            return
+        ch = arg
+        if ch not in LETTERS:
+            return
+        if len(draft) >= n:
+            await query.message.edit_text(f"В слове уже {n} букв, друк. Жми «Готово» или «Сбросить».", reply_markup=word_build_kb(n, draft))
+            return
+        draft = draft + [ch]
+        await state.update_data(draft=draft)
+        current = "".join(draft)
+        hidden = f"<tg-spoiler>{html.escape(current)}</tg-spoiler>" if current else "<tg-spoiler>…</tg-spoiler>"
+        await query.message.edit_text(
+            f"Загадывающий, слово из {n} букв ({len(draft)}/{n}). Твоё слово: {hidden}. Жми буквы:",
+            reply_markup=word_build_kb(n, draft),
+        )
         return
 
     if data.startswith("lobby:"):
@@ -990,16 +1227,27 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         if cur is not None and cur in {s.state for s in TWO_PLAYER_STATES.values()}:
             await query.message.edit_text("Игра уже идёт, друк. Дождись конца партии.")
             return
+        chat_id = getattr(getattr(query.message, "chat", None), "id", None)
+        lobby = LOBBIES.get(chat_id) or {}
+        if lobby.get("kind") != kind:
+            await query.message.edit_text("Это приглашение уже не действует, друк. Напиши игру заново.")
+            return
+        if uid == lobby.get("host"):
+            await query.answer()
+            return
+        host_id = lobby["host"]
+        LOBBIES.pop(chat_id, None)
         await state.clear()
         await state.set_state(TWO_PLAYER_STATES[kind])
+        players = [host_id, uid]
         if kind == "knb2":
-            await state.update_data(players=[uid], moves=[])
+            await state.update_data(players=players, moves=[])
         elif kind == "knt2":
-            await state.update_data(players=[uid], cells=[None] * 9, turn="X")
+            await state.update_data(players=players, cells=[None] * 9, turn="X")
         elif kind == "chk2":
-            await state.update_data(players=[uid], board=start_board(), turn="w", owners={})
+            await state.update_data(players=players, board=start_board(), turn="w", owners={})
         elif kind == "wordle2":
-            await state.update_data(players=[uid], word=None, guesses=[], attempts=0, setter=None)
+            await state.update_data(players=players, word=None, guesses=[], attempts=0, setter=None)
         text, markup = lobby_payload(kind)
         await query.message.edit_text(text, reply_markup=markup)
         return
@@ -1354,21 +1602,20 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         return
 
     if data == "word_again":
-        word = random.choice(WORDLE_WORDS)
         await state.set_state(GameStates.wordle)
-        await state.update_data(word=word, guesses=[], attempts=0, players=[uid])
+        await state.update_data(word=None, length=None, guesses=[], attempts=0, players=[uid])
         await query.message.edit_text(
-            "Новый Wordle! Загадал слово из 5 букв. У тебя 6 попыток. Пиши вариант!",
-            reply_markup=stop_kb(),
+            "Новый Wordle! Сколько букв загадываю? Жми кнопку.",
+            reply_markup=length_kb(),
         )
         return
 
     if data == "word2_again":
         await state.set_state(GameStates.wordle_two)
-        await state.update_data(word=None, guesses=[], attempts=0, setter=None, players=[uid])
+        await state.update_data(word=None, length=None, guesses=[], attempts=0, setter=None, building=False, draft=[], players=[uid])
         await query.message.edit_text(
-            "Новый раунд! Загадывающий — напиши тайное слово из 5 букв.",
-            reply_markup=stop_kb(),
+            "Новый раунд! Загадывающий, выбери длину слова кнопками.",
+            reply_markup=length_kb(),
         )
         return
 
