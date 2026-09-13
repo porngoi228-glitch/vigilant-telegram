@@ -66,6 +66,7 @@ class GameStates(StatesGroup):
     hangman = State()
     wordle = State()
     wordle_two = State()
+    dice_wait = State()
 
 
 SHAPES = {"камень", "ножницы", "бумага"}
@@ -159,6 +160,28 @@ async def say(message: Message, text: str, markup=None):
         reply_parameters=ReplyParameters(message_id=message.message_id),
         reply_markup=markup,
     )
+
+
+async def bind_player(state, uid, max_players=1):
+    st = await state.get_data()
+    players = st.get("players") or []
+    if uid in players:
+        return True
+    if len(players) >= max_players:
+        return False
+    await state.update_data(players=players + [uid])
+    return True
+
+
+async def ensure_players(state, uid, max_players=2):
+    st = await state.get_data()
+    players = st.get("players") or []
+    if uid and uid not in players and len(players) < max_players:
+        await state.update_data(players=players + [uid])
+
+
+def msg_uid(message):
+    return getattr(message.from_user, "id", None) or 0
 
 
 def btn(text: str, data: str) -> InlineKeyboardButton:
@@ -457,12 +480,15 @@ async def start_knb(message: Message, state: FSMContext):
         raise SkipHandler
     await state.clear()
     await state.set_state(GameStates.knb_wait)
+    await state.update_data(players=[msg_uid(message)])
     await say(message, "Камень, ножницы, бумага?", markup=knb_board("knb"))
 
 
 @dp.message(F.text)
 async def knb_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.knb_wait:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     move = norm(message.text)
     if move not in SHAPES:
@@ -482,15 +508,14 @@ async def knb_move(message: Message, state: FSMContext):
 async def start_knb_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"кнб на двоих", "кнб вдвоём", "кнб2"}:
         raise SkipHandler
-    await state.clear()
-    await state.set_state(GameStates.knb_two_wait)
-    await state.update_data(moves=[])
-    await say(message, "Играем вдвоём, друки! Первый жмёт свой ход.", markup=knb_board("knb2"))
+    await say(message, "🎮 КНБ вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("knb2"))
 
 
 @dp.message(F.text)
 async def knb_two_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.knb_two_wait:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=2):
         raise SkipHandler
     move = norm(message.text)
     if move not in SHAPES:
@@ -519,6 +544,8 @@ async def start_dice(message: Message, state: FSMContext):
     if norm(message.text) not in {"кости", "кости с ботом", "кубик", "брось кости"}:
         raise SkipHandler
     await state.clear()
+    await state.set_state(GameStates.dice_wait)
+    await state.update_data(players=[msg_uid(message)])
     user_roll = random.randint(1, 6)
     bot_roll = random.randint(1, 6)
     if user_roll > bot_roll:
@@ -540,13 +567,15 @@ async def start_guess(message: Message, state: FSMContext):
         raise SkipHandler
     await state.clear()
     await state.set_state(GameStates.guess_wait)
-    await state.update_data(secret=random.randint(1, 20))
+    await state.update_data(secret=random.randint(1, 20), players=[msg_uid(message)])
     await say(message, "Я загадал число от 1 до 20. Жми вариант, друк.", markup=guess_board())
 
 
 @dp.message(F.text)
 async def guess_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.guess_wait:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     try:
         guess = int(norm(message.text))
@@ -577,7 +606,7 @@ async def start_checkers(message: Message, state: FSMContext):
     board = start_board()
     await state.clear()
     await state.set_state(GameStates.checkers)
-    await state.update_data(board=board)
+    await state.update_data(board=board, players=[msg_uid(message)])
     await say(
         message,
         render(board)
@@ -590,21 +619,14 @@ async def start_checkers(message: Message, state: FSMContext):
 async def start_checkers_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"шашки на двоих", "шашки вдвоём", "шашки с братаном", "шашки2"}:
         raise SkipHandler
-    board = start_board()
-    await state.clear()
-    await state.set_state(GameStates.checkers_two)
-    await state.update_data(board=board, turn="w", owners={})
-    await say(
-        message,
-        render(board)
-        + "\n\nИграем вдвоём! Белые (⛀) ходят первыми, затем чёрные (⛂). Жми свою шашку, потом клетку хода.",
-        markup=chk_board(board, prefix="chk2"),
-    )
+    await say(message, "🎮 Шашки вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("chk2"))
 
 
 @dp.message(F.text)
 async def checkers_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.checkers:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     board = (await state.get_data())["board"]
     path = parse_path(message.text)
@@ -648,7 +670,7 @@ async def start_knt(message: Message, state: FSMContext):
         raise SkipHandler
     await state.clear()
     await state.set_state(GameStates.knt_wait)
-    await state.update_data(cells=[None] * 9)
+    await state.update_data(cells=[None] * 9, players=[msg_uid(message)])
     cells = [None] * 9
     await say(message, f"{knt_render(cells)}\n\nТы — X, я — O. Жми клетку.", markup=knt_board(cells, "knt"))
 
@@ -656,6 +678,8 @@ async def start_knt(message: Message, state: FSMContext):
 @dp.message(F.text)
 async def knt_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.knt_wait:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     cells = (await state.get_data())["cells"]
     try:
@@ -699,16 +723,14 @@ async def knt_move(message: Message, state: FSMContext):
 async def start_knt_two(message: Message, state: FSMContext):
     if norm(message.text) not in {"крестики-нолики на двоих", "кнт на двоих", "кнт вдвоём", "кнт2"}:
         raise SkipHandler
-    await state.clear()
-    await state.set_state(GameStates.knt_two_wait)
-    await state.update_data(cells=[None] * 9, turn="X")
-    cells = [None] * 9
-    await say(message, f"{knt_render(cells)}\n\nИграем вдвоём, друки! X ходит первым — жмите клетку.", markup=knt_board(cells, "knt2"))
+    await say(message, "🎮 КНТ вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("knt2"))
 
 
 @dp.message(F.text)
 async def knt_two_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.knt_two_wait:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=2):
         raise SkipHandler
     data = await state.get_data()
     cells = data["cells"]
@@ -747,7 +769,7 @@ async def start_hangman(message: Message, state: FSMContext):
     word = random.choice(HANGMAN_WORDS)
     await state.clear()
     await state.set_state(GameStates.hangman)
-    await state.update_data(word=word, found=[False] * len(word), wrong=[], left=6)
+    await state.update_data(word=word, found=[False] * len(word), wrong=[], left=6, players=[msg_uid(message)])
     await say(
         message,
         hangman_text(word, [False] * len(word), [], 6)
@@ -759,6 +781,8 @@ async def start_hangman(message: Message, state: FSMContext):
 @dp.message(F.text)
 async def hangman_guess(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.hangman:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     data = await state.get_data()
     word = data["word"]
@@ -807,6 +831,39 @@ def stop_kb() -> InlineKeyboardMarkup:
     return kb([[btn("Сдаться", "stop_game")]])
 
 
+def lobby_kb(kind: str) -> InlineKeyboardMarkup:
+    return kb([[btn("Сыграть", f"lobby:{kind}")], [btn("Отмена", "stop_game")]])
+
+
+TWO_PLAYER_STATES = {
+    "knb2": GameStates.knb_two_wait,
+    "knt2": GameStates.knt_two_wait,
+    "chk2": GameStates.checkers_two,
+    "wordle2": GameStates.wordle_two,
+}
+
+
+def lobby_payload(kind: str):
+    if kind == "knb2":
+        return "Играем вдвоём, друки! Первый жмёт свой ход.", knb_board("knb2")
+    if kind == "knt2":
+        cells = [None] * 9
+        return f"{knt_render(cells)}\n\nИграем вдвоём, друки! X ходит первым.", knt_board(cells, "knt2")
+    if kind == "chk2":
+        board = start_board()
+        return (
+            render(board)
+            + "\n\nИграем вдвоём! Белые (⛀) ходят первыми, затем чёрные (⛂). Жми свою шашку, потом клетку хода.",
+            chk_board(board, prefix="chk2"),
+        )
+    if kind == "wordle2":
+        return (
+            "Играем вдвоём! Загадывающий — напиши тайное слово из 5 букв (покажу скрыто). Угадывающий будет писать варианты.",
+            stop_kb(),
+        )
+    return None, None
+
+
 @dp.message(F.text)
 async def start_wordle(message: Message, state: FSMContext):
     if norm(message.text).lower() not in {"wordle", "вордл", "вордли"}:
@@ -814,7 +871,7 @@ async def start_wordle(message: Message, state: FSMContext):
     word = random.choice(WORDLE_WORDS)
     await state.clear()
     await state.set_state(GameStates.wordle)
-    await state.update_data(word=word, guesses=[], attempts=0)
+    await state.update_data(word=word, guesses=[], attempts=0, players=[msg_uid(message)])
     await say(
         message,
         f"Загадал слово из 5 букв, друк. У тебя 6 попыток. Пиши вариант!\n🟩 верная буква, 🟨 есть в слове, ⬛ нет.",
@@ -825,6 +882,8 @@ async def start_wordle(message: Message, state: FSMContext):
 @dp.message(F.text)
 async def wordle_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.wordle:
+        raise SkipHandler
+    if not await bind_player(state, msg_uid(message), max_players=1):
         raise SkipHandler
     t = norm(message.text).lower()
     if not is_word5(t):
@@ -855,16 +914,14 @@ async def wordle_move(message: Message, state: FSMContext):
 async def start_wordle_two(message: Message, state: FSMContext):
     if norm(message.text).lower() not in {"wordle на двоих", "wordle2", "вордл на двоих"}:
         raise SkipHandler
-    await state.clear()
-    await state.set_state(GameStates.wordle_two)
-    await state.update_data(word=None, guesses=[], attempts=0, setter=None)
-    await say(message, "Играем вдвоём! Загадывающий — напиши тайное слово из 5 букв (оно покажу скрыто). Угадывающий будет писать варианты.", markup=stop_kb())
+    await say(message, "🎮 Wordle вдвоём! Жми «Сыграть», чтобы начать.", markup=lobby_kb("wordle2"))
 
 
 @dp.message(F.text)
 async def wordle_two_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.wordle_two:
         raise SkipHandler
+    await ensure_players(state, msg_uid(message))
     data = await state.get_data()
     t = norm(message.text).lower()
     if data["word"] is None:
@@ -909,9 +966,42 @@ async def on_game_callback(query: CallbackQuery, state: FSMContext):
 
 
 async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
+    uid = getattr(query.from_user, "id", None) or 0
+    cur = await state.get_state()
+    two_p = data.startswith(("knb2:", "knt2:", "chk2:"))
+    players = []
+    if cur is not None:
+        st = await state.get_data()
+        players = st.get("players") or []
+        if players and uid and uid not in players:
+            if (two_p and len(players) < 2) or data.startswith("lobby:"):
+                pass
+            else:
+                await query.answer()
+                return
+
     if data == "stop_game":
         await state.clear()
         await query.message.edit_text("Игра отменена, друк.")
+        return
+
+    if data.startswith("lobby:"):
+        kind = data.split(":", 1)[1]
+        if cur is not None and cur in {s.state for s in TWO_PLAYER_STATES.values()}:
+            await query.message.edit_text("Игра уже идёт, друк. Дождись конца партии.")
+            return
+        await state.clear()
+        await state.set_state(TWO_PLAYER_STATES[kind])
+        if kind == "knb2":
+            await state.update_data(players=[uid], moves=[])
+        elif kind == "knt2":
+            await state.update_data(players=[uid], cells=[None] * 9, turn="X")
+        elif kind == "chk2":
+            await state.update_data(players=[uid], board=start_board(), turn="w", owners={})
+        elif kind == "wordle2":
+            await state.update_data(players=[uid], word=None, guesses=[], attempts=0, setter=None)
+        text, markup = lobby_payload(kind)
+        await query.message.edit_text(text, reply_markup=markup)
         return
 
     if data.startswith("knb:"):
@@ -928,6 +1018,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "knb_again":
         await state.set_state(GameStates.knb_wait)
+        await state.update_data(players=[uid])
         await query.message.edit_text("Камень, ножницы, бумага?", reply_markup=knb_board("knb"))
         return
 
@@ -935,6 +1026,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         if await state.get_state() != GameStates.knb_two_wait:
             await query.message.edit_text("Игра уже закончилась, друки. Начните заново.")
             return
+        await ensure_players(state, uid)
         move = data.split(":", 1)[1]
         st = await state.get_data()
         moves = st.get("moves", [])
@@ -959,7 +1051,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "knb2_again":
         await state.set_state(GameStates.knb_two_wait)
-        await state.update_data(moves=[])
+        await state.update_data(players=[uid], moves=[])
         await query.message.edit_text("Играем вдвоём, друки! Первый жмёт ход.", reply_markup=knb_board("knb2"))
         return
 
@@ -995,7 +1087,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "guess_again":
         await state.set_state(GameStates.guess_wait)
-        await state.update_data(secret=random.randint(1, 20))
+        await state.update_data(secret=random.randint(1, 20), players=[uid])
         await query.message.edit_text("Я загадал число от 1 до 20. Жми вариант, друк.", reply_markup=guess_board())
         return
 
@@ -1035,7 +1127,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "knt_again":
         await state.set_state(GameStates.knt_wait)
-        await state.update_data(cells=[None] * 9)
+        await state.update_data(cells=[None] * 9, players=[uid])
         cells = [None] * 9
         await query.message.edit_text(knt_render(cells) + "\n\nТы — X, я — O. Жми клетку.", reply_markup=knt_board(cells, "knt"))
         return
@@ -1044,6 +1136,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         if await state.get_state() != GameStates.knt_two_wait:
             await query.message.edit_text("Игра уже закончилась, друки.")
             return
+        await ensure_players(state, uid)
         st = await state.get_data()
         cells = st["cells"]
         turn = st["turn"]
@@ -1068,7 +1161,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "knt2_again":
         await state.set_state(GameStates.knt_two_wait)
-        await state.update_data(cells=[None] * 9, turn="X")
+        await state.update_data(cells=[None] * 9, turn="X", players=[uid])
         cells = [None] * 9
         await query.message.edit_text(knt_render(cells) + "\n\nИграем вдвоём, друки! X ходит первым.", reply_markup=knt_board(cells, "knt2"))
         return
@@ -1106,7 +1199,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
     if data == "hang_again":
         word = random.choice(HANGMAN_WORDS)
         await state.set_state(GameStates.hangman)
-        await state.update_data(word=word, found=[False] * len(word), wrong=[], left=6)
+        await state.update_data(word=word, found=[False] * len(word), wrong=[], left=6, players=[uid])
         await query.message.edit_text(
             hangman_text(word, [False] * len(word), [], 6) + "\n\nЖми букву или пиши слово целиком, друк.",
             reply_markup=hang_board([]),
@@ -1186,6 +1279,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
             return
         _, rs, cs = data.split(":")
         r, c = int(rs), int(cs)
+        await ensure_players(state, uid)
         st = await state.get_data()
         board = st["board"]
         turn = st["turn"]
@@ -1252,7 +1346,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
     if data == "chk2_again":
         board = start_board()
         await state.set_state(GameStates.checkers_two)
-        await state.update_data(board=board, turn="w", owners={})
+        await state.update_data(board=board, turn="w", owners={}, players=[uid])
         await query.message.edit_text(
             render(board) + "\n\nНовая партия! Белые (⛀) ходят первыми.",
             reply_markup=chk_board(board, prefix="chk2"),
@@ -1262,7 +1356,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
     if data == "word_again":
         word = random.choice(WORDLE_WORDS)
         await state.set_state(GameStates.wordle)
-        await state.update_data(word=word, guesses=[], attempts=0)
+        await state.update_data(word=word, guesses=[], attempts=0, players=[uid])
         await query.message.edit_text(
             "Новый Wordle! Загадал слово из 5 букв. У тебя 6 попыток. Пиши вариант!",
             reply_markup=stop_kb(),
@@ -1271,7 +1365,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
 
     if data == "word2_again":
         await state.set_state(GameStates.wordle_two)
-        await state.update_data(word=None, guesses=[], attempts=0, setter=None)
+        await state.update_data(word=None, guesses=[], attempts=0, setter=None, players=[uid])
         await query.message.edit_text(
             "Новый раунд! Загадывающий — напиши тайное слово из 5 букв.",
             reply_markup=stop_kb(),
@@ -1281,7 +1375,7 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
     if data == "chk_again":
         board = start_board()
         await state.set_state(GameStates.checkers)
-        await state.update_data(board=board)
+        await state.update_data(board=board, players=[uid])
         await query.message.edit_text(
             render(board) + "\n\nНовая партия! Ты белыми (⛀), твой ход.",
             reply_markup=chk_board(board),
