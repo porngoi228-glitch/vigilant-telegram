@@ -344,12 +344,12 @@ async def send_random_media():
 
 
 async def media_loop():
-    base = int(os.environ.get("MEDIA_MINUTES", "180"))
+    base = int(os.environ.get("MEDIA_MINUTES", "35"))
     if base <= 0:
         logging.info("MEDIA_MINUTES=0 — рассылка медиа отключена.")
         return
-    low = max(base // 2, 15)
-    high = max(base * 2, 30)
+    low = max(int(base * 0.7), 15)
+    high = max(int(base * 1.3), 30)
     while True:
         await asyncio.sleep(random.randint(low, high) * 60)
         try:
