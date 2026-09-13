@@ -60,6 +60,7 @@ class GameStates(StatesGroup):
     knb_two_wait = State()
     guess_wait = State()
     checkers = State()
+    checkers_two = State()
     knt_wait = State()
     knt_two_wait = State()
     hangman = State()
@@ -90,6 +91,10 @@ GAME_STARTERS = {
     "давай в шашки",
     "сходим в шашки",
     "в шашки",
+    "шашки на двоих",
+    "шашки вдвоём",
+    "шашки с братаном",
+    "шашки2",
     "крестики-нолики",
     "кнт",
     "кнт с ботом",
@@ -110,6 +115,7 @@ GAME_LIST = (
     "• <b>кости</b> — бросаем кубики против бота\n"
     "• <b>угадай число</b> — отгадай число от 1 до 20\n"
     "• <b>шашки</b> — партия против бота (жми шашку, потом клетку хода)\n"
+    "• <b>шашки на двоих</b> — вдвоём на одной доске, даже с разных устройств в одной группе\n"
     "• <b>кнт</b> — крестики-нолики против бота; на двоих: «кнт на двоих»\n"
     "• <b>виселица</b> — угадай слово по буквам\n"
     "Всё играется кнопками. Напиши название игры, чтобы начать. Выйти — «стоп»."
@@ -192,7 +198,7 @@ def hang_board(used) -> InlineKeyboardMarkup:
     return kb(rows)
 
 
-def chk_board(board, selected=None, dests=None) -> InlineKeyboardMarkup:
+def chk_board(board, selected=None, dests=None, prefix="chk") -> InlineKeyboardMarkup:
     d = set(dests or [])
     rows = []
     for r in range(8):
@@ -204,7 +210,7 @@ def chk_board(board, selected=None, dests=None) -> InlineKeyboardMarkup:
                 label = "*"
             else:
                 label = SYMBOLS.get(board[r][c], "·")
-            row.append(btn(label, f"chk:{r}:{c}"))
+            row.append(btn(label, f"{prefix}:{r}:{c}"))
         rows.append(row)
     rows.append([btn("Сдаться", "stop_game")])
     return kb(rows)
@@ -527,6 +533,22 @@ async def start_checkers(message: Message, state: FSMContext):
         render(board)
         + "\n\nТы играешь белыми (⛀) и ходишь первым. Жми свою шашку, потом клетку — куда сходить. Или пиши ход текстом: e3-d4. «стоп» — выйти.",
         markup=chk_board(board),
+    )
+
+
+@dp.message(F.text)
+async def start_checkers_two(message: Message, state: FSMContext):
+    if norm(message.text) not in {"шашки на двоих", "шашки вдвоём", "шашки с братаном", "шашки2"}:
+        raise SkipHandler
+    board = start_board()
+    await state.clear()
+    await state.set_state(GameStates.checkers_two)
+    await state.update_data(board=board, turn="w", owners={})
+    await say(
+        message,
+        render(board)
+        + "\n\nИграем вдвоём! Белые (⛀) ходят первыми, затем чёрные (⛂). Жми свою шашку, потом клетку хода.",
+        markup=chk_board(board, prefix="chk2"),
     )
 
 
@@ -1011,6 +1033,85 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         await query.message.edit_text(
             render(board, selected, sel_dests) + "\n\nТуда нельзя, друк. Жми «*» или свою шашку.",
             reply_markup=chk_board(board, selected, sel_dests),
+        )
+        return
+
+    if data.startswith("chk2:"):
+        if await state.get_state() != GameStates.checkers_two:
+            await query.message.edit_text("Игра уже закончилась, друки.")
+            return
+        _, rs, cs = data.split(":")
+        r, c = int(rs), int(cs)
+        st = await state.get_data()
+        board = st["board"]
+        turn = st["turn"]
+        owners = st.get("owners", {})
+        color = turn
+        pieces = (color, color + "k")
+        other = "b" if color == "w" else "w"
+        owner = owners.get(color)
+        who = html.escape(query.from_user.username or query.from_user.full_name or "игрок")
+        if color not in owners:
+            owners[color] = who
+        turn_note = f"Ходят {SYMBOLS['w' if color == 'w' else 'b']} {owners[color]}."
+        selected = st.get("selected")
+        if selected is None:
+            if board[r][c] in pieces:
+                dests = {m["squares"][-1] for m in legal_moves(board, color) if m["squares"][0] == (r, c)}
+                if not dests:
+                    await query.message.edit_text(render(board) + f"\n\nУ этой шашки нет хода, друк. Выбери другую.\n{turn_note}", reply_markup=chk_board(board, prefix="chk2"))
+                    return
+                await state.update_data(selected=(r, c), owners=owners)
+                await query.message.edit_text(
+                    render(board, (r, c), dests) + f"\n\nВыбрана шашка. «*» — куда можно. Жми цель.\n{turn_note}",
+                    reply_markup=chk_board(board, (r, c), dests, prefix="chk2"),
+                )
+            else:
+                await query.message.edit_text(render(board) + f"\n\nЭто не твоя шашка, друк, и не твой ход.\n{turn_note}", reply_markup=chk_board(board, prefix="chk2"))
+            return
+        if (r, c) == selected:
+            await state.update_data(selected=None)
+            await query.message.edit_text(render(board) + f"\n\nЖми свою шашку.\n{turn_note}", reply_markup=chk_board(board, prefix="chk2"))
+            return
+        if board[r][c] in pieces:
+            dests = {m["squares"][-1] for m in legal_moves(board, color) if m["squares"][0] == (r, c)}
+            if dests:
+                await state.update_data(selected=(r, c))
+                await query.message.edit_text(render(board, (r, c), dests) + f"\n\nВыбрана шашка. Жми цель.\n{turn_note}", reply_markup=chk_board(board, (r, c), dests, prefix="chk2"))
+            else:
+                await query.message.edit_text(render(board) + f"\n\nУ этой шашки нет хода, друк.\n{turn_note}", reply_markup=chk_board(board, prefix="chk2"))
+            return
+        sel_moves = [m for m in legal_moves(board, color) if m["squares"][0] == selected]
+        sel_cell = (r, c)
+        if sel_cell in {m["squares"][-1] for m in sel_moves}:
+            move = next(m for m in sel_moves if m["squares"][-1] == sel_cell)
+            board = apply_move(board, color, move)
+            taken = len(move["captured"])
+            if piece_count(board, other) == 0 or not legal_moves(board, other):
+                await state.clear()
+                await query.message.edit_text(
+                    render(board) + (f"\n\n{owners[color]} выиграл партию, друк!" if color in owners else "\n\nПартия окончена, друки!"),
+                    reply_markup=replay_board("chk2_again"),
+                )
+                return
+            await state.update_data(board=board, selected=None, turn=other, owners=owners)
+            nxt_note = f"Ходят {SYMBOLS['w' if other == 'w' else 'b']} {owners.get(other, '—')}."
+            await query.message.edit_text(render(board) + f"\n\nХод сделан." + (f" Взято: {taken}." if taken else "") + f"\n{nxt_note}", reply_markup=chk_board(board, prefix="chk2"))
+            return
+        sel_dests = {m["squares"][-1] for m in sel_moves}
+        await query.message.edit_text(
+            render(board, selected, sel_dests) + f"\n\nТуда нельзя, друк. Жми «*» или свою шашку.\n{turn_note}",
+            reply_markup=chk_board(board, selected, sel_dests, prefix="chk2"),
+        )
+        return
+
+    if data == "chk2_again":
+        board = start_board()
+        await state.set_state(GameStates.checkers_two)
+        await state.update_data(board=board, turn="w", owners={})
+        await query.message.edit_text(
+            render(board) + "\n\nНовая партия! Белые (⛀) ходят первыми.",
+            reply_markup=chk_board(board, prefix="chk2"),
         )
         return
 
