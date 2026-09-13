@@ -32,7 +32,7 @@ from Checkers import (
 )
 
 load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = (os.getenv("BOT_TOKEN") or "").strip().strip('"').strip("'")
 
 if not TOKEN:
     raise SystemExit(
