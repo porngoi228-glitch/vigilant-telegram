@@ -40,6 +40,19 @@ from Checkers import (
     start_board,
     user_move,
 )
+from Chess import (
+    SYM as CH_SYM,
+    start_board as ch_start_board,
+    render as ch_render,
+    apply_move as ch_apply,
+    legal_moves as ch_legal,
+    in_check as ch_in_check,
+    status as ch_status,
+    dests_for as ch_dests,
+    promote as ch_promote,
+    bot_move as ch_bot_move,
+    is_draw as ch_is_draw,
+)
 
 load_dotenv()
 TOKEN = (os.getenv("BOT_TOKEN") or "").strip().strip('"').strip("'")
@@ -68,6 +81,8 @@ class GameStates(StatesGroup):
     wordle = State()
     wordle_two = State()
     dice_wait = State()
+    chess = State()
+    chess_two = State()
 
 
 SHAPES = {"камень", "ножницы", "бумага"}
@@ -112,6 +127,11 @@ GAME_STARTERS = {
     "wordle",
     "вордл",
     "вордли",
+    "шахматы",
+    "шахматы с ботом",
+    "шахматы на двоих",
+    "шахматы вдвоём",
+    "шахматы2",
     "wordle на двоих",
     "wordle2",
     "вордл на двоих",
@@ -129,6 +149,7 @@ GAME_LIST = (
     "• <b>кнт</b> — крестики-нолики против бота; на двоих: «кнт на двоих»\n"
     "• <b>виселица</b> — угадай слово по буквам\n"
     "• <b>wordle</b> — угадай слово от 4 до 13 букв (длину выбираешь кнопками, за 6 попыток); на двоих: «wordle на двоих»\n"
+    "• <b>шахматы</b> — сыграй с ботом (ты белыми); на двоих: «шахматы на двоих»\n"
     "Всё играется кнопками. Напиши название игры, чтобы начать. Выйти — «стоп»."
 )
 
@@ -177,7 +198,7 @@ async def say(message: Message, text: str, markup=None):
         reply_parameters=ReplyParameters(message_id=message.message_id),
         reply_markup=markup,
     )
-    if ACTIVE_CHATS and random.random() < 0.05:
+    if ACTIVE_CHATS and random.random() < 0.20:
         try:
             await send_media_to_chat(message.chat.id)
         except Exception:
@@ -264,6 +285,18 @@ def chk_board(board, selected=None, dests=None, prefix="chk") -> InlineKeyboardM
                 label = "*"
             else:
                 label = SYMBOLS.get(board[r][c], "·")
+            row.append(btn(label, f"{prefix}:{r}:{c}"))
+        rows.append(row)
+    rows.append([btn("Сдаться", "stop_game")])
+    return kb(rows)
+
+
+def chm_board(board, prefix: str = "chm") -> InlineKeyboardMarkup:
+    rows = []
+    for r in range(8):
+        row = []
+        for c in range(8):
+            label = CH_SYM.get(board[r][c], "·")
             row.append(btn(label, f"{prefix}:{r}:{c}"))
         rows.append(row)
     rows.append([btn("Сдаться", "stop_game")])
@@ -766,6 +799,32 @@ async def start_checkers_two(message: Message, state: FSMContext):
 
 
 @dp.message(F.text)
+async def start_chess(message: Message, state: FSMContext):
+    if norm(message.text) not in {"шахматы", "шахматы с ботом"}:
+        raise SkipHandler
+    await state.clear()
+    await state.set_state(GameStates.chess)
+    board = ch_start_board()
+    await state.update_data(board=board, ep=None, cast="KQkq", sel=None, dests=[], players=[msg_uid(message)])
+    await say(
+        message,
+        "Шахматы! Ты играешь белыми. Жми свою фигуру, потом клетку хода."
+        + "\n\n"
+        + ch_render(board),
+        markup=chm_board(board, "chm"),
+    )
+
+
+@dp.message(F.text)
+async def start_chess_two(message: Message, state: FSMContext):
+    if norm(message.text) not in {"шахматы на двоих", "шахматы вдвоём", "шахматы2"}:
+        raise SkipHandler
+    await state.clear()
+    LOBBIES[message.chat.id] = {"host": msg_uid(message), "kind": "chm2"}
+    await say(message, "♞ Шахматы вдвоём!\nЖдём второго игрока, друк. Второй жми «Вступить».", markup=lobby_kb("chm2"))
+
+
+@dp.message(F.text)
 async def checkers_move(message: Message, state: FSMContext):
     if await state.get_state() != GameStates.checkers:
         raise SkipHandler
@@ -1002,6 +1061,7 @@ TWO_PLAYER_STATES = {
     "knt2": GameStates.knt_two_wait,
     "chk2": GameStates.checkers_two,
     "wordle2": GameStates.wordle_two,
+    "chm2": GameStates.chess_two,
 }
 
 
@@ -1024,7 +1084,110 @@ def lobby_payload(kind: str):
             "покажу скрыто, чтобы не подсматривали. Угадывающий будет писать варианты.",
             length_kb(),
         )
+    if kind == "chm2":
+        board = ch_start_board()
+        return (
+            ch_render(board)
+            + "\n\nИграем в шахматы вдвоём! Хост — белые (♔), второй — чёрные (♚). "
+            "Жми свою фигуру, потом клетку хода. Ходят по очереди.",
+            chm_board(board, "chm2"),
+        )
     return None, None
+
+
+async def chess_tap(query: CallbackQuery, state: FSMContext, prefix: str, r: int, c: int):
+    two = prefix == "chm2"
+    if await state.get_state() != (GameStates.chess_two.state if two else GameStates.chess.state):
+        await query.message.edit_text("Игра уже закончилась, друк.")
+        return
+    uid = getattr(query.from_user, "id", None) or 0
+    st = await state.get_data()
+    b = st["board"]
+    ep = st.get("ep")
+    cast = st.get("cast") or "KQkq"
+    sel = st.get("sel")
+    dests = set(st.get("dests") or [])
+    turn = st.get("turn") or "w"
+    players = st.get("players") or []
+
+    if two:
+        holder = players[0] if turn == "w" else (players[1] if len(players) > 1 else None)
+        if uid != holder:
+            await query.answer()
+            return
+
+    piece = b[r][c]
+    mine = bool(piece) and piece.isupper() == (turn == "w")
+    again = "chm2_again" if two else "chm_again"
+
+    if (r, c) == sel:
+        await state.update_data(sel=None, dests=[])
+        await query.message.edit_text(ch_render(b) + "\n\nВыбор снят, друк.", reply_markup=chm_board(b, prefix))
+        return
+
+    if mine:
+        d = ch_dests(b, (r, c), turn, ep, cast)
+        if not d:
+            await query.message.edit_text(ch_render(b) + "\n\nЭта фигура не может ходить, друк.", reply_markup=chm_board(b, prefix))
+            return
+        await state.update_data(sel=(r, c), dests=sorted(list(d)))
+        await query.message.edit_text(ch_render(b, selected=(r, c), dests=d) + "\n\nЖми клетку хода.", reply_markup=chm_board(b, prefix))
+        return
+
+    if sel and (r, c) in dests:
+        nb, ep2, cast2 = ch_apply(b, sel, (r, c), ep, cast)
+        ch_promote(nb, turn)
+        nturn = "b" if turn == "w" else "w"
+        st_res = ch_status(nb, nturn, ep2, cast2)
+        if st_res[0] == "checkmate":
+            await state.clear()
+            who = "Ты выиграл" if turn == "w" else ("Чёрные выиграли" if two else "Бот выиграл")
+            await query.message.edit_text(ch_render(nb) + f"\n\nШах и мат, друк! {who}.", reply_markup=replay_board(again))
+            return
+        if st_res[0] == "stalemate":
+            await state.clear()
+            await query.message.edit_text(ch_render(nb) + "\n\nПат — ничья, друк.", reply_markup=replay_board(again))
+            return
+        if ch_is_draw(nb, nturn):
+            await state.clear()
+            await query.message.edit_text(ch_render(nb) + "\n\nНичья: сил почти не осталось, друк.", reply_markup=replay_board(again))
+            return
+
+        if not two:
+            bmove = ch_bot_move(nb, ep2, cast2)
+            if bmove is None:
+                await state.clear()
+                await query.message.edit_text(ch_render(nb) + "\n\nШах и мат, друк! Ты выиграл.", reply_markup=replay_board("chm_again"))
+                return
+            nb, ep2, cast2 = ch_apply(nb, (bmove[0], bmove[1]), (bmove[2], bmove[3]), ep2, cast2)
+            ch_promote(nb, "b")
+            st_res = ch_status(nb, "w", ep2, cast2)
+            add = "Бот сходил."
+            if ch_in_check(nb, "w"):
+                add += " Шах тебе, друк!"
+            if st_res[0] == "checkmate":
+                await state.clear()
+                await query.message.edit_text(ch_render(nb) + "\n\nШах и мат, друк. Бот выиграл.", reply_markup=replay_board("chm_again"))
+                return
+            if st_res[0] == "stalemate":
+                await state.clear()
+                await query.message.edit_text(ch_render(nb) + "\n\nПат — ничья, друк.", reply_markup=replay_board("chm_again"))
+                return
+            if ch_is_draw(nb, "w"):
+                await state.clear()
+                await query.message.edit_text(ch_render(nb) + "\n\nНичья: сил почти не осталось, друк.", reply_markup=replay_board("chm_again"))
+                return
+            await state.update_data(board=nb, ep=ep2, cast=cast2, sel=None, dests=[])
+            await query.message.edit_text(ch_render(nb) + "\n\n" + add, reply_markup=chm_board(nb, "chm"))
+            return
+
+        who = "Белые" if nturn == "w" else "Чёрные"
+        extra = " Шах!" if ch_in_check(nb, nturn) else ""
+        await state.update_data(board=nb, ep=ep2, cast=cast2, sel=None, dests=[], turn=nturn)
+        await query.message.edit_text(ch_render(nb) + f"\n\nХод {who}.{extra}", reply_markup=chm_board(nb, "chm2"))
+        return
+
+    await query.answer()
 
 
 @dp.message(F.text)
@@ -1126,7 +1289,7 @@ async def on_game_callback(query: CallbackQuery, state: FSMContext):
 async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
     uid = getattr(query.from_user, "id", None) or 0
     cur = await state.get_state()
-    two_p = data.startswith(("knb2:", "knt2:", "chk2:"))
+    two_p = data.startswith(("knb2:", "knt2:", "chk2:", "chm2:"))
     players = []
     if cur is not None:
         st = await state.get_data()
@@ -1143,6 +1306,15 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         LOBBIES.pop(chat_id, None)
         await state.clear()
         await query.message.edit_text("Игра отменена, друк.")
+        return
+
+    if data.startswith(("chm:", "chm2:")):
+        prefix, rc = data.split(":", 1)
+        try:
+            r, c = map(int, rc.split(":"))
+        except ValueError:
+            return
+        await chess_tap(query, state, prefix, r, c)
         return
 
     if data.startswith("wlen:"):
@@ -1248,6 +1420,8 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
             await state.update_data(players=players, board=start_board(), turn="w", owners={})
         elif kind == "wordle2":
             await state.update_data(players=players, word=None, guesses=[], attempts=0, setter=None)
+        elif kind == "chm2":
+            await state.update_data(players=players, board=ch_start_board(), ep=None, cast="KQkq", sel=None, dests=[], turn="w")
         text, markup = lobby_payload(kind)
         await query.message.edit_text(text, reply_markup=markup)
         return
@@ -1626,6 +1800,26 @@ async def _route_callback(query: CallbackQuery, state: FSMContext, data: str):
         await query.message.edit_text(
             render(board) + "\n\nНовая партия! Ты белыми (⛀), твой ход.",
             reply_markup=chk_board(board),
+        )
+        return
+
+    if data == "chm_again":
+        board = ch_start_board()
+        await state.set_state(GameStates.chess)
+        await state.update_data(board=board, ep=None, cast="KQkq", sel=None, dests=[], players=[uid])
+        await query.message.edit_text(
+            "Новая партия, друк! Ты белыми.\n\n" + ch_render(board),
+            reply_markup=chm_board(board, "chm"),
+        )
+        return
+
+    if data == "chm2_again":
+        board = ch_start_board()
+        await state.set_state(GameStates.chess_two)
+        await state.update_data(board=board, ep=None, cast="KQkq", sel=None, dests=[], turn="w", players=[uid])
+        await query.message.edit_text(
+            "Новая партия вдвоём! Хост белыми.\n\n" + ch_render(board),
+            reply_markup=chm_board(board, "chm2"),
         )
         return
 
