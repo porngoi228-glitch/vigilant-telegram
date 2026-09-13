@@ -1,0 +1,3 @@
+entrypoint = "druk.py"
+
+run = ["python", "druk.py"]

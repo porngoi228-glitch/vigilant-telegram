@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: druk-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python druk.py
+    enableHealthCheck: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
