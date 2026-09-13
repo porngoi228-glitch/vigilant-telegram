@@ -46,7 +46,7 @@ async def handle_message(message: Message):
     response = find_response(message.text)
     if response is None:
         return
-    await message.answer(response, message_thread_id=message.message_thread_id)
+    await message.answer(response)
 
 
 PORT = int(os.environ.get("PORT", "8080"))
