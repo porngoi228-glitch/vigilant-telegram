@@ -229,12 +229,19 @@ SYMBOLS = {
 }
 
 
-def render(b):
-    lines = ["  a b c d e f g h"]
+def render(b, selected=None, dests=None):
+    d = set(dests or [])
+    top = "  a   b   c   d   e   f   g   h"
+    lines = [top]
     for r in range(SIZE - 1, -1, -1):
-        row = [str(r + 1)]
+        row = [f"{r + 1} "]
         for c in range(SIZE):
-            row.append(SYMBOLS.get(b[r][c], "·"))
-        lines.append(" ".join(row))
-    lines.append("  a b c d e f g h")
+            if (r, c) == selected:
+                row.append("◉")
+            elif (r, c) in d:
+                row.append("*")
+            else:
+                row.append(SYMBOLS.get(b[r][c], "·"))
+        lines.append("  ".join(row))
+    lines.append(top)
     return "\n".join(lines)
