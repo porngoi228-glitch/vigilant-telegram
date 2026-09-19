@@ -6,6 +6,8 @@ import os
 import random
 import re
 import threading
+import ast
+import math
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
@@ -83,6 +85,7 @@ class GameStates(StatesGroup):
     dice_wait = State()
     chess = State()
     chess_two = State()
+    zhopa = State()
 
 
 SHAPES = {"камень", "ножницы", "бумага"}
@@ -287,7 +290,7 @@ def chk_board(board, selected=None, dests=None, prefix="chk") -> InlineKeyboardM
                 label = SYMBOLS.get(board[r][c], "·")
             row.append(btn(label, f"{prefix}:{r}:{c}"))
         rows.append(row)
-    rows.append([btn("Сдаться", "stop_game")])
+    rows.append([btn("Отмена", "stop_game")])
     return kb(rows)
 
 
@@ -617,6 +620,78 @@ async def mat_block(message: Message, state: FSMContext):
     await say(message, "Эй, друк, не пиши такое при мне 🙂")
 
 
+def calc_expr(text: str):
+    t = text.strip().replace("×", "*").replace("÷", "/").replace("−", "-").replace(",", ".")
+    t = re.sub(r"\s+", "", t)
+    if not t or not any(c.isdigit() for c in t):
+        return None
+    if not any(c in "+-*/%" for c in t):
+        return None
+    if not re.fullmatch(r"[\d+\-*/%().]+", t):
+        return None
+    try:
+        node = ast.parse(t, mode="eval")
+    except SyntaxError:
+        return None
+    allowed = (
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+        ast.USub, ast.UAdd,
+    )
+    for n in ast.walk(node):
+        if not isinstance(n, allowed):
+            return None
+    try:
+        val = eval(compile(node, "<calc>", "eval"), {"__builtins__": {}}, {})
+    except Exception:
+        return None
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, float):
+        if not math.isfinite(val):
+            return None
+        val = round(val, 6)
+        if val == int(val) and abs(val) < 1e15:
+            val = int(val)
+    return str(val)
+
+
+def zhopa_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "жопа"
+    if n % 10 in (2, 3, 4) and not (12 <= n % 100 <= 14):
+        return "жопы"
+    return "жоп"
+
+
+@dp.message(F.text)
+async def zhopa_start(message: Message, state: FSMContext):
+    if await state.get_state() is not None:
+        raise SkipHandler
+    if norm(message.text) not in {"ты жопа", "ты жопой"}:
+        raise SkipHandler
+    await state.clear()
+    await state.set_state(GameStates.zhopa)
+    await state.update_data(zhopa=2)
+    await say(message, "А ты две жопы")
+    return
+
+
+@dp.message(F.text)
+async def zhopa_move(message: Message, state: FSMContext):
+    if await state.get_state() != GameStates.zhopa:
+        raise SkipHandler
+    n = (await state.get_data()).get("zhopa", 1)
+    if "жоп" not in norm(message.text):
+        await state.clear()
+        await say(message, "Все, разговор окончен.")
+        return
+    n += 1
+    await state.update_data(zhopa=n)
+    await say(message, f"А ты {n} {zhopa_word(n)}")
+    return
+
+
 @dp.message(F.text)
 async def handle_message(message: Message, state: FSMContext):
     if await state.get_state() is not None:
@@ -630,6 +705,13 @@ async def handle_message(message: Message, state: FSMContext):
         return
     if t in GAME_STARTERS:
         raise SkipHandler
+    if t == "друк":
+        await send_media_to_chat(message.chat.id)
+        return
+    calc_result = calc_expr(t)
+    if calc_result is not None:
+        await say(message, f"{html.escape(t)} = {calc_result}")
+        return
     response = find_response(message.text)
     if response is None:
         raise SkipHandler
